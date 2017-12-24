@@ -1,3 +1,5 @@
+import json
+
 import machine
 import time
 import ubinascii
@@ -5,9 +7,19 @@ import network
 import onewire, ds18x20
 from umqtt.simple import MQTTClient
 
+try:
+    with open('config.json', 'r') as config:
+        config = json.loads(config.read())
+        config["essid"]
+except:
+    config = {
+        'essid': '<your-ssid>',
+        'pwd': '<your-password>'
+    }
+
 WIFI_CONFIG = {
-    "essid": "<your-ssid-here>",
-    "wifi_password": "<your-password-here>"
+    "essid": config['essid'],
+    "wifi_password": config['pwd'],
 }
 
 wlan = network.WLAN(network.STA_IF)
@@ -21,8 +33,8 @@ wlan.ifconfig()
 
 # These defaults are overwritten with the contents of /config.json by load_config()
 CONFIG = {
-    "broker": "iot.eclipse.org",
-    "port": 1883,
+    "broker": "platform.nextechs.it",
+    "port": 7000,
     "sensor_pin": 0,
     "client_id": "warmy_1",
     "topic": "warmy",
@@ -44,6 +56,8 @@ MAP = [
 class Thermostat(object):
     OFF_MODE = 'OFF'
     MANUAL_MODE = 'MANUAL'
+    MAX_ERRORS_NUMBER = 60
+
     TOLERANCE = 0.5
 
     OFFSET = 1.4
@@ -93,6 +107,7 @@ class Thermostat(object):
     client = None
 
     def __init__(self):
+        self.errors_count = 0
         print("Attempting to connect to broker {}".format(CONFIG['broker']))
 
         self.client = MQTTClient(CONFIG['client_id'], CONFIG['broker'], CONFIG['port'])
@@ -105,6 +120,24 @@ class Thermostat(object):
                                                                              CONFIG['client_id']))
         print("Connected to {}".format(CONFIG['broker']))
 
+    def store_settings(self):
+        json_settings = {
+            'mode': self.mode,
+            'desired_temp': self.desired_temp
+        }
+
+        with open('settings.json', 'w') as settings:
+            settings.write(json.dumps(json_settings))
+
+    def load_settings(self):
+        try:
+            with open('settings.json', 'r') as settings:
+                json_settings = json.loads(settings.read())
+                self.mode = json_settings['mode']
+                self.desired_temp = json_settings['desired_temp']
+        except:
+            pass
+
     def on_message_received(self, topic, msg):
         payload_string = msg.decode("utf-8")
 
@@ -114,36 +147,48 @@ class Thermostat(object):
         if 'mode/set' in str(topic):
             self.mode = payload_string
 
+        self.store_settings()
+
+    def notify(self, topic, payload):
+        try:
+            self.client.publish(topic, payload)
+            self.errors_count = 0
+        except:
+            print("Error Publishing data")
+            self.errors_count += 1
+            if self.errors_count > Thermostat.MAX_ERRORS_NUMBER:
+                machine.reset()
+
     def notify_name(self):
         message = 'Actual temperature is {}'.format(self.actual_temp)
 
-        self.client.publish('/{}/{}/name'.format(CONFIG['topic'],
-                                                 CONFIG['client_id']),
-                            bytes(CONFIG['name'], 'utf-8'))
+        self.notify('/{}/{}/name'.format(CONFIG['topic'],
+                                         CONFIG['client_id']),
+                    bytes(CONFIG['name'], 'utf-8'))
         print(message)
 
     def notify_actual_temp(self):
         message = 'Actual temperature is {}'.format(self.actual_temp)
 
-        self.client.publish('/{}/{}/actual_temperature'.format(CONFIG['topic'],
-                                                               CONFIG['client_id']),
-                            bytes(str(self.actual_temp), 'utf-8'))
+        self.notify('/{}/{}/actual_temperature'.format(CONFIG['topic'],
+                                                       CONFIG['client_id']),
+                    bytes(str(self.actual_temp), 'utf-8'))
         print(message)
 
     def notify_desired_temp(self):
         message = 'Desired temperature is {}'.format(self.desired_temp)
 
-        self.client.publish('/{}/{}/desired_temperature'.format(CONFIG['topic'],
-                                                                CONFIG['client_id']),
-                            bytes(str(self.desired_temp), 'utf-8'))
+        self.notify('/{}/{}/desired_temperature'.format(CONFIG['topic'],
+                                                        CONFIG['client_id']),
+                    bytes(str(self.desired_temp), 'utf-8'))
         print(message)
 
     def notify_actual_mode(self):
         message = 'Actual Mode is {}'.format(self.mode)
 
-        self.client.publish('/{}/{}/mode'.format(CONFIG['topic'],
-                                                 CONFIG['client_id']),
-                            bytes(self.mode, 'utf-8'))
+        self.notify('/{}/{}/mode'.format(CONFIG['topic'],
+                                         CONFIG['client_id']),
+                    bytes(self.mode, 'utf-8'))
         print(message)
 
     def notify_is_warming(self):
@@ -152,9 +197,9 @@ class Thermostat(object):
         if self.warming:
             payload = '1'
 
-        self.client.publish('/{}/{}/warming'.format(CONFIG['topic'],
-                                                    CONFIG['client_id']),
-                            bytes(payload, 'utf-8'))
+        self.notify('/{}/{}/warming'.format(CONFIG['topic'],
+                                            CONFIG['client_id']),
+                    bytes(payload, 'utf-8'))
         print(message)
 
     def print_pin_status(self, pin_name, status):
@@ -209,11 +254,28 @@ class Main(object):
 
 
 def main():
+    """
+    :return:
+    """
+
+    # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
+    MAX_CONNECTION_WAIT_PERIODS = 120
+    # Wait period length in seconds
+    CONNECTION_WAIT_PERIOD = 1
+    # Number of periods spent waiting
+    connection_periods_spent = 0
+
     while not wlan.isconnected():
         print("Waiting for connection")
-        time.sleep(1)
+        time.sleep(CONNECTION_WAIT_PERIOD)
+        connection_periods_spent += 1
+        if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
+            machine.reset()
 
     Main.thermostat = Thermostat()
+
+    # Load previous settings from file system
+    Main.thermostat.load_settings()
 
     while True:
         Main.thermostat.thermostat()
