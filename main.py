@@ -62,6 +62,8 @@ MAP = [
 class Thermostat(object):
     OFF_MODE = 'OFF'
     MANUAL_MODE = 'MANUAL'
+    PROGRAM_MODE = 'PROGRAM'
+
     MAX_ERRORS_NUMBER = 60
 
     TOLERANCE = 0.5
@@ -225,7 +227,6 @@ class Thermostat(object):
         return actual_temp
 
     def is_warming_needed(self):
-
         if self.warming:
             return self.actual_temp < self.desired_temp + self.TOLERANCE
         else:
