@@ -14,7 +14,13 @@ try:
 except:
     config = {
         'essid': '<your-ssid>',
-        'pwd': '<your-password>'
+        'pwd': '<your-password>',
+        "broker": "platform.nextechs.it",
+        "port": 7000,
+        "sensor_pin": 0,
+        "client_id": "warmy_1",
+        "topic": "warmy",
+        "name": "Warmy 1"
     }
 
 WIFI_CONFIG = {
@@ -33,12 +39,12 @@ wlan.ifconfig()
 
 # These defaults are overwritten with the contents of /config.json by load_config()
 CONFIG = {
-    "broker": "platform.nextechs.it",
-    "port": 7000,
-    "sensor_pin": 0,
-    "client_id": "warmy_1",
-    "topic": "warmy",
-    "name": "Warmy 1"
+    "broker": config["broker"],
+    "port": config["port"],
+    "sensor_pin": config["sensor_pin"],
+    "client_id": config["client_id"],
+    "topic": config["topic"],
+    "name": config["name"]
 }
 
 MAP = [
