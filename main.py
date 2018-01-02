@@ -1,5 +1,5 @@
 import json
-
+import sys
 import machine
 import time
 import ubinascii
@@ -27,15 +27,6 @@ WIFI_CONFIG = {
     "essid": config['essid'],
     "wifi_password": config['pwd'],
 }
-
-wlan = network.WLAN(network.STA_IF)
-print("Starting Wifi")
-wlan.active(True)
-print("Wifi started")
-print("Attempting to connect to {}".format(WIFI_CONFIG['essid']))
-wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
-wlan.config('mac')
-wlan.ifconfig()
 
 # These defaults are overwritten with the contents of /config.json by load_config()
 CONFIG = {
@@ -113,7 +104,6 @@ class Thermostat(object):
     client = None
 
     def __init__(self):
-        self.errors_count = 0
         print("Attempting to connect to broker {}".format(CONFIG['broker']))
 
         self.client = MQTTClient(CONFIG['client_id'], CONFIG['broker'], CONFIG['port'])
@@ -156,14 +146,7 @@ class Thermostat(object):
         self.store_settings()
 
     def notify(self, topic, payload):
-        try:
-            self.client.publish(topic, payload)
-            self.errors_count = 0
-        except:
-            print("Error Publishing data")
-            self.errors_count += 1
-            if self.errors_count > Thermostat.MAX_ERRORS_NUMBER:
-                machine.reset()
+        self.client.publish(topic, payload)
 
     def notify_name(self):
         message = 'Actual temperature is {}'.format(self.actual_temp)
@@ -255,6 +238,11 @@ class Thermostat(object):
         self.notify_name()
 
 
+def reset():
+    print("Restarting machine")
+    machine.reset()
+
+
 class Main(object):
     thermostat = None
 
@@ -263,29 +251,40 @@ def main():
     """
     :return:
     """
+    try:
+        # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
+        MAX_CONNECTION_WAIT_PERIODS = 30
+        # Wait period length in seconds
+        CONNECTION_WAIT_PERIOD = 1
+        # Number of periods spent waiting
+        connection_periods_spent = 0
 
-    # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
-    MAX_CONNECTION_WAIT_PERIODS = 120
-    # Wait period length in seconds
-    CONNECTION_WAIT_PERIOD = 1
-    # Number of periods spent waiting
-    connection_periods_spent = 0
+        wlan = network.WLAN(network.STA_IF)
+        print("Starting Wifi")
+        wlan.active(True)
+        print("Wifi started")
+        print("Attempting to connect to {}".format(WIFI_CONFIG['essid']))
+        wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
+        wlan.config('mac')
+        wlan.ifconfig()
 
-    while not wlan.isconnected():
-        print("Waiting for connection")
-        time.sleep(CONNECTION_WAIT_PERIOD)
-        connection_periods_spent += 1
-        if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
-            machine.reset()
+        while not wlan.isconnected():
+            print("Waiting for connection")
+            time.sleep(CONNECTION_WAIT_PERIOD)
+            connection_periods_spent += 1
+            if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
+                reset()
 
-    Main.thermostat = Thermostat()
+        Main.thermostat = Thermostat()
 
-    # Load previous settings from file system
-    Main.thermostat.load_settings()
+        # Load previous settings from file system
+        Main.thermostat.load_settings()
 
-    while True:
-        Main.thermostat.thermostat()
+        while True:
+            Main.thermostat.thermostat()
 
+    except:
+        reset()
 
 if __name__ == '__main__':
     main()
