@@ -288,7 +288,6 @@ def main():
         while True:
             thermostat.thermostat()
     except Exception as e:
-        print(e)
         machine.reset()
 
 
