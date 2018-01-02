@@ -1,159 +1,204 @@
 import json
-
 import machine
-import time
-import ubinascii
 import network
 import onewire, ds18x20
 from umqtt.simple import MQTTClient
+import time
+import utime
 
-try:
-    with open('config.json', 'r') as config:
-        config = json.loads(config.read())
-        config["essid"]
-except:
-    config = {
-        'essid': '<your-ssid>',
-        'pwd': '<your-password>',
-        "broker": "platform.nextechs.it",
-        "port": 7000,
-        "sensor_pin": 0,
-        "client_id": "warmy_1",
-        "topic": "warmy",
-        "name": "Warmy 1"
-    }
 
+class UUIDObject(object):
+    def __init__(self):
+        self.id = str(time.time())
+
+    def from_json(self, json_dict):
+        pass
+
+    def to_json(self):
+        pass
+
+
+class WarmySetup(object):
+    def __init__(self):
+        self.daily_profiles_assignments = [None] * 7
+        self.available_profiles = []
+        self.base_temperature = 16.5
+        self.last_edit_timestamp = time.time()
+
+    def __get_profile_by_id(self, id):
+        return [x for x in self.available_profiles if x['id'] == id][0]
+
+    def get_required_temp(self, timestamp):
+        timetuple = utime.localtime(timestamp)
+        required_temp = self.base_temperature
+        if self.daily_profiles_assignments[timetuple[6]] is not None:
+            profile = self.__get_profile_by_id(self.daily_profiles_assignments[timetuple[6]])
+            seconds_since_midnight = timetuple[3] * (60 * 60) + timetuple[4] * 60
+            for interval in profile['temperatures']:
+                if seconds_since_midnight >= interval['start'] and seconds_since_midnight <= interval['end']:
+                    required_temp = interval.target_temperature
+
+        return required_temp
+
+    def from_json(self, json_dict):
+        self.base_temperature = json_dict['base_temperature']
+        self.daily_profiles_assignments = json_dict['daily_profiles_assignments']
+        self.available_profiles = json_dict['daily_profiles']
+        if 'last_edit_timestamp' in json_dict:
+            self.last_edit_timestamp = json_dict['last_edit_timestamp']
+
+    def to_json(self):
+        return {
+            'base_temperature': self.base_temperature,
+            'daily_profiles': self.available_profiles,
+            'daily_profiles_assignments': self.daily_profiles_assignments,
+            'last_edit_timestamp': self.last_edit_timestamp
+        }
+
+
+class Warmy(UUIDObject):
+    DISABLED_MODE = 'DISABLED'
+    OVERRIDE_TEMPERATURE_MODE = 'OVERRIDE_TEMPERATURE'
+    OVERRIDE_FIRE_MODE = 'OVERRIDE_FIRE'
+    AUTO_MODE = 'AUTO'
+
+    def __init__(self):
+        self.internal_temperature = 0.0
+        self.internal_temperature_last_update = None
+        self.external_temperature = 0.0
+        self.warming = False
+        self.disabled = True
+        self.desired_temperature = 0.0
+        self.mode = Warmy.DISABLED_MODE
+        self.hysteresis = 0.5
+        self.setup = WarmySetup()
+        self.id = 'warmy_1'
+
+    def set_mode(self, new_mode_dict):
+        if new_mode_dict['mode'] == Warmy.DISABLED_MODE:
+            self.mode = Warmy.DISABLED_MODE
+
+        if new_mode_dict['mode'] == Warmy.OVERRIDE_TEMPERATURE_MODE \
+                and 'temperature' in new_mode_dict:
+            self.mode = Warmy.OVERRIDE_TEMPERATURE_MODE
+            self.desired_temperature = new_mode_dict['temperature']
+
+        if new_mode_dict['mode'] == Warmy.AUTO_MODE:
+            self.mode = Warmy.AUTO_MODE
+
+    def set_temperature(self, temp):
+        self.internal_temperature = temp
+        self.internal_temperature_last_update = time.time()
+
+    def is_warming_needed(self, desired_temp, measured_temp):
+        if self.warming:
+            return measured_temp < desired_temp + self.hysteresis
+        else:
+            return measured_temp < desired_temp - self.hysteresis
+
+    def thermostat(self):
+
+        if self.mode == Warmy.AUTO_MODE:
+            self.disabled = False
+            desired_temp = self.setup.get_required_temp(time.time())
+            if self.is_warming_needed(desired_temp, self.internal_temperature):
+                self.warming = True
+            else:
+                self.warming = False
+
+        if self.mode == Warmy.OVERRIDE_TEMPERATURE_MODE:
+            self.disabled = False
+            if self.is_warming_needed(self.desired_temperature, self.internal_temperature):
+                self.warming = True
+            else:
+                self.warming = False
+
+        if self.mode == Warmy.DISABLED_MODE:
+            self.disabled = True
+            self.warming = False
+
+    def to_json(self):
+        now = time.time()
+
+        return {
+            'fired': self.warming,
+            'mode': self.mode,
+            'set_point': self.desired_temperature,
+            'programmed_set_point': self.desired_temperature,
+            'hysteresis': self.hysteresis,
+            'timestamp': now,
+            'external_temperature': self.external_temperature,
+            'external_temperature_last_update': now,
+            'internal_temperature': self.internal_temperature,
+            'internal_temperature_last_update': self.internal_temperature_last_update,
+            'override_end_timestamp': 999999
+        }
+
+
+with open('config.json', 'r') as config:
+    config = json.loads(config.read())
+    config["essid"]
 WIFI_CONFIG = {
     "essid": config['essid'],
     "wifi_password": config['pwd'],
 }
-
 wlan = network.WLAN(network.STA_IF)
-print("Starting Wifi")
 wlan.active(True)
-print("Wifi started")
-print("Attempting to connect to {}".format(WIFI_CONFIG['essid']))
 wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
 wlan.config('mac')
 wlan.ifconfig()
 
-# These defaults are overwritten with the contents of /config.json by load_config()
-CONFIG = {
-    "broker": config["broker"],
-    "port": config["port"],
-    "sensor_pin": config["sensor_pin"],
-    "client_id": config["client_id"],
-    "topic": config["topic"],
-    "name": config["name"]
-}
 
-MAP = [
-    (16, 'D0'),
-    (2, 'D4'),
-    (13, 'D7'),
-    (12, 'D6'),
-    (14, 'D5'),
-    (0, 'D3'),
-    (4, 'D2'),
-    (5, 'D1'),
-]
-
-
-class Thermostat(object):
-    OFF_MODE = 'OFF'
-    MANUAL_MODE = 'MANUAL'
-    PROGRAM_MODE = 'PROGRAM'
-
+class WarmyThermostat(object):
     MAX_ERRORS_NUMBER = 60
-
-    TOLERANCE = 0.5
-
     OFFSET = 1.4
-
-    """
-    The desired temp in celsius
-    """
-    desired_temp = 18
-
-    """
-    Override variable, if true the old thermostat has to be overridden
-    """
-    mode = OFF_MODE
-
-    """
-    """
-    warming = False
-
-    """
-    The actual measured temperature
-    """
-    actual_temp = 20
-
-    """
-    The output of this pin overrides the old thermostat
-    """
     override_pin = machine.Pin(5, machine.Pin.OUT)
-
     override_pin.high()
-    """
-    The output of this pin starts warming
-    """
     warming_pin = machine.Pin(4, machine.Pin.OUT)
     warming_pin.high()
-
-    """
-    The input pin that reads from DS18B20 thermometer
-    """
-
     thermometer_pin = machine.Pin(2, machine.Pin.IN)
-
-    """
-    The thermometer object
-    """
     thermometer = ds18x20.DS18X20(onewire.OneWire(thermometer_pin))
-
     client = None
 
     def __init__(self):
         self.errors_count = 0
-        print("Attempting to connect to broker {}".format(CONFIG['broker']))
-
-        self.client = MQTTClient(CONFIG['client_id'], CONFIG['broker'], CONFIG['port'])
+        self.client = MQTTClient(config['client_id'], config['broker'], config['port'])
         self.client.set_callback(self.on_message_received)
 
         self.client.connect()
-        self.client.subscribe('/{}/{}/mode/set'.format(CONFIG['topic'],
-                                                       CONFIG['client_id']))
-        self.client.subscribe('/{}/{}/manual/desired_temperature/set'.format(CONFIG['topic'],
-                                                                             CONFIG['client_id']))
-        print("Connected to {}".format(CONFIG['broker']))
+        self.client.subscribe('warmy2/{}/in/command/set-mode'.format(config['client_id']))
+        self.client.subscribe('warmy2/{}/in/command/setup'.format(config['client_id']))
+        self.warmy = Warmy()
+        self.warmy.id = config['client_id']
 
     def store_settings(self):
-        json_settings = {
-            'mode': self.mode,
-            'desired_temp': self.desired_temp
-        }
-
+        json_settings = self.warmy.setup.to_json()
+        print("Settings encoded in json")
         with open('settings.json', 'w') as settings:
+            print("File Opened")
             settings.write(json.dumps(json_settings))
+            print("File Wrote")
 
     def load_settings(self):
         try:
             with open('settings.json', 'r') as settings:
                 json_settings = json.loads(settings.read())
-                self.mode = json_settings['mode']
-                self.desired_temp = json_settings['desired_temp']
+                setup = WarmySetup()
+                setup.from_json(json_settings)
+                self.warmy.setup = setup
         except:
             pass
+
+
 
     def on_message_received(self, topic, msg):
         payload_string = msg.decode("utf-8")
 
-        if 'desired_temperature/set' in str(topic):
-            self.desired_temp = float(payload_string)
+        if 'in/command/set-mode' in str(topic):
+            self.set_mode(payload_string)
 
-        if 'mode/set' in str(topic):
-            self.mode = payload_string
+        if 'in/command/setup' in str(topic):
+            self.set_config(payload_string)
 
         self.store_settings()
 
@@ -162,56 +207,21 @@ class Thermostat(object):
             self.client.publish(topic, payload)
             self.errors_count = 0
         except:
-            print("Error Publishing data")
             self.errors_count += 1
-            if self.errors_count > Thermostat.MAX_ERRORS_NUMBER:
-                machine.reset()
+            pass
 
-    def notify_name(self):
-        message = 'Actual temperature is {}'.format(self.actual_temp)
+    def notify_state(self):
+        self.notify('warmy2/%s/state' % self.warmy.id, json.dumps(self.warmy.to_json()))
 
-        self.notify('/{}/{}/name'.format(CONFIG['topic'],
-                                         CONFIG['client_id']),
-                    bytes(CONFIG['name'], 'utf-8'))
-        print(message)
+    def notify_config(self):
+        self.notify('warmy2/%s/setup' % self.warmy.id, json.dumps(self.warmy.setup.to_json()))
 
-    def notify_actual_temp(self):
-        message = 'Actual temperature is {}'.format(self.actual_temp)
+    def set_mode(self, payload_string):
+        self.warmy.set_mode(json.loads(payload_string))
 
-        self.notify('/{}/{}/actual_temperature'.format(CONFIG['topic'],
-                                                       CONFIG['client_id']),
-                    bytes(str(self.actual_temp), 'utf-8'))
-        print(message)
-
-    def notify_desired_temp(self):
-        message = 'Desired temperature is {}'.format(self.desired_temp)
-
-        self.notify('/{}/{}/desired_temperature'.format(CONFIG['topic'],
-                                                        CONFIG['client_id']),
-                    bytes(str(self.desired_temp), 'utf-8'))
-        print(message)
-
-    def notify_actual_mode(self):
-        message = 'Actual Mode is {}'.format(self.mode)
-
-        self.notify('/{}/{}/mode'.format(CONFIG['topic'],
-                                         CONFIG['client_id']),
-                    bytes(self.mode, 'utf-8'))
-        print(message)
-
-    def notify_is_warming(self):
-        message = 'Warming is {}'.format(self.warming)
-        payload = '0'
-        if self.warming:
-            payload = '1'
-
-        self.notify('/{}/{}/warming'.format(CONFIG['topic'],
-                                            CONFIG['client_id']),
-                    bytes(payload, 'utf-8'))
-        print(message)
-
-    def print_pin_status(self, pin_name, status):
-        print("Pin {} is {}".format(pin_name, status))
+    def set_config(self, payload_string):
+        self.warmy.setup.from_json(json.loads(payload_string))
+        self.notify_config()
 
     def measure_temp(self):
         try:
@@ -226,66 +236,63 @@ class Thermostat(object):
 
         return actual_temp
 
-    def is_warming_needed(self):
-        if self.warming:
-            return self.actual_temp < self.desired_temp + self.TOLERANCE
-        else:
-            return self.actual_temp < self.desired_temp - self.TOLERANCE
-
     def thermostat(self):
         self.client.check_msg()
-        self.actual_temp = self.measure_temp()
+        actual_temp = self.measure_temp()
 
-        if self.mode == self.MANUAL_MODE:
-            self.override_pin.low()
-            if self.is_warming_needed():
-                self.warming_pin.low()
-                self.warming = True
-            else:
-                self.warming_pin.high()
-                self.warming = False
-        else:
+        self.warmy.set_temperature(actual_temp)
+
+        if self.warmy.disabled:
             self.override_pin.high()
             self.warming_pin.high()
-            self.warming = False
+        else:
+            self.override_pin.low()
+            if self.warmy.warming:
+                self.warming_pin.high()
+            else:
+                self.warming_pin.low()
 
-        self.notify_actual_mode()
-        self.notify_actual_temp()
-        self.notify_desired_temp()
-        self.notify_is_warming()
-        self.notify_name()
+        print(
+            """
+Mode: %s
+Override: %s
+Warming: %s
+Temp: %s
+            """ % (
+                self.warmy.mode,
+                not self.warmy.disabled,
+                self.warmy.warming,
+                self.warmy.internal_temperature
+            )
+        )
 
-
-class Main(object):
-    thermostat = None
+        self.notify_state()
 
 
 def main():
     """
     :return:
     """
-
     # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
     MAX_CONNECTION_WAIT_PERIODS = 120
     # Wait period length in seconds
     CONNECTION_WAIT_PERIOD = 1
     # Number of periods spent waiting
     connection_periods_spent = 0
-
     while not wlan.isconnected():
         print("Waiting for connection")
         time.sleep(CONNECTION_WAIT_PERIOD)
         connection_periods_spent += 1
         if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
             machine.reset()
-
-    Main.thermostat = Thermostat()
-
+    thermostat = WarmyThermostat()
     # Load previous settings from file system
-    Main.thermostat.load_settings()
-
+    thermostat.load_settings()
     while True:
-        Main.thermostat.thermostat()
+        try:
+            thermostat.thermostat()
+        except Exception as e:
+            pass
 
 
 if __name__ == '__main__':

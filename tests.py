@@ -71,16 +71,17 @@ def test_profiles_creation():
 
 def test_setup_decode():
     json_setup = """
+{"base_temperature":16.5,"daily_profiles":[{"id":"giorno_lavorativo","name":"Giorno Lavorativo","temperatures":[{"start":0,"end":3600,"target_temperature":19},{"start":27000,"end":32400,"target_temperature":21},{"start":64800,"end":86399,"target_temperature":19}]},{"id":"weekends","name":"Week end","temperatures":[{"start":64800,"end":86399,"target_temperature":19}]}],"daily_profiles_assignments":["weekends","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","weekends"]}
+    """
+
+    json_setup = """
 {"base_temperature":16.5,"daily_profiles":[{"id":"giorno_lavorativo","name":"Giorno Lavorativo","temperatures":[{"start":0,"end":3600,"target_temperature":19},{"start":27000,"end":32400,"target_temperature":21},{"start":64800,"end":86399,"target_temperature":19}]},{"id":"weekends","name":"Week end","temperatures":[{"start":64800,"end":86399,"target_temperature":19}]}],"daily_profiles_assignments":["weekends","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","giorno_lavorativo","weekends"],"last_edit_timestamp":1508875332}
     """
 
     setup = WarmySetup()
     setup.from_json(json.loads(json_setup))
 
-    diff(setup.to_json(), json.loads(json_setup))
-
-    print(diff(setup.to_json(), json.loads(json_setup)))
-
+    assert (diff(setup.to_json(), json.loads(json_setup)) == {})
 
 if __name__ == '__main__':
     test_profiles_creation()
