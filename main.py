@@ -5,6 +5,7 @@ import onewire, ds18x20
 from umqtt.simple import MQTTClient
 import time
 import utime
+from ntptime import settime
 
 
 class UUIDObject(object):
@@ -142,11 +143,6 @@ WIFI_CONFIG = {
     "essid": config['essid'],
     "wifi_password": config['pwd'],
 }
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
-wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
-wlan.config('mac')
-wlan.ifconfig()
 
 
 class WarmyThermostat(object):
@@ -189,8 +185,6 @@ class WarmyThermostat(object):
         except:
             pass
 
-
-
     def on_message_received(self, topic, msg):
         payload_string = msg.decode("utf-8")
 
@@ -203,12 +197,7 @@ class WarmyThermostat(object):
         self.store_settings()
 
     def notify(self, topic, payload):
-        try:
-            self.client.publish(topic, payload)
-            self.errors_count = 0
-        except:
-            self.errors_count += 1
-            pass
+        self.client.publish(topic, payload)
 
     def notify_state(self):
         self.notify('warmy2/%s/state' % self.warmy.id, json.dumps(self.warmy.to_json()))
@@ -221,7 +210,6 @@ class WarmyThermostat(object):
 
     def set_config(self, payload_string):
         self.warmy.setup.from_json(json.loads(payload_string))
-        self.notify_config()
 
     def measure_temp(self):
         try:
@@ -267,32 +255,42 @@ Temp: %s
         )
 
         self.notify_state()
+        self.notify_config()
 
 
 def main():
     """
     :return:
     """
-    # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
-    MAX_CONNECTION_WAIT_PERIODS = 120
-    # Wait period length in seconds
-    CONNECTION_WAIT_PERIOD = 1
-    # Number of periods spent waiting
-    connection_periods_spent = 0
-    while not wlan.isconnected():
-        print("Waiting for connection")
-        time.sleep(CONNECTION_WAIT_PERIOD)
-        connection_periods_spent += 1
-        if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
-            machine.reset()
-    thermostat = WarmyThermostat()
-    # Load previous settings from file system
-    thermostat.load_settings()
-    while True:
-        try:
+    try:
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
+        wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
+        wlan.config('mac')
+        wlan.ifconfig()
+        # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
+        MAX_CONNECTION_WAIT_PERIODS = 120
+        # Wait period length in seconds
+        CONNECTION_WAIT_PERIOD = 1
+        # Number of periods spent waiting
+        connection_periods_spent = 0
+        while not wlan.isconnected():
+            print("Waiting for connection")
+            time.sleep(CONNECTION_WAIT_PERIOD)
+            connection_periods_spent += 1
+            if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
+                machine.reset()
+
+        settime()
+        thermostat = WarmyThermostat()
+        # Load previous settings from file system
+        thermostat.load_settings()
+        while True:
             thermostat.thermostat()
-        except Exception as e:
-            pass
+    except Exception as e:
+        print(e)
+        machine.reset()
+
 
 
 if __name__ == '__main__':
