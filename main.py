@@ -22,12 +22,12 @@ class UUIDObject(object):
 class WarmySetup(object):
     def __init__(self):
         self.daily_profiles_assignments = [None] * 7
-        self.available_profiles = []
+        self.daily_profiles = {}
         self.base_temperature = 16.5
         self.last_edit_timestamp = time.time()
 
     def __get_profile_by_id(self, id):
-        return [x for x in self.available_profiles if x['id'] == id][0]
+        return self.daily_profiles[id]
 
     def get_required_temp(self, timestamp):
         timetuple = utime.localtime(timestamp)
@@ -44,14 +44,14 @@ class WarmySetup(object):
     def from_json(self, json_dict):
         self.base_temperature = json_dict['base_temperature']
         self.daily_profiles_assignments = json_dict['daily_profiles_assignments']
-        self.available_profiles = json_dict['daily_profiles']
+        self.daily_profiles = json_dict['daily_profiles']
         if 'last_edit_timestamp' in json_dict:
             self.last_edit_timestamp = json_dict['last_edit_timestamp']
 
     def to_json(self):
         return {
             'base_temperature': self.base_temperature,
-            'daily_profiles': self.available_profiles,
+            'daily_profiles': self.daily_profiles,
             'daily_profiles_assignments': self.daily_profiles_assignments,
             'last_edit_timestamp': self.last_edit_timestamp
         }
@@ -138,7 +138,7 @@ class Warmy(UUIDObject):
 
 with open('config.json', 'r') as config:
     config = json.loads(config.read())
-    config["essid"]
+
 WIFI_CONFIG = {
     "essid": config['essid'],
     "wifi_password": config['pwd'],
@@ -289,7 +289,6 @@ def main():
             thermostat.thermostat()
     except Exception as e:
         machine.reset()
-
 
 
 if __name__ == '__main__':
