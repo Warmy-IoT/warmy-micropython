@@ -5,12 +5,13 @@ import onewire, ds18x20
 from umqtt.simple import MQTTClient
 import time
 import utime
+import ubinascii
 from ntptime import settime
 
 
 class UUIDObject(object):
     def __init__(self):
-        self.id = str(time.time())
+        self.id = str(utime.time())
 
     def from_json(self, json_dict):
         pass
@@ -24,7 +25,7 @@ class WarmySetup(object):
         self.daily_profiles_assignments = [None] * 7
         self.daily_profiles = {}
         self.base_temperature = 16.5
-        self.last_edit_timestamp = time.time()
+        self.last_edit_timestamp = utime.time()
 
     def __get_profile_by_id(self, id):
         return self.daily_profiles[id]
@@ -37,7 +38,7 @@ class WarmySetup(object):
             seconds_since_midnight = timetuple[3] * (60 * 60) + timetuple[4] * 60
             for interval in profile['temperatures']:
                 if seconds_since_midnight >= interval['start'] and seconds_since_midnight <= interval['end']:
-                    required_temp = interval.target_temperature
+                    required_temp = interval['target_temperature']
 
         return required_temp
 
@@ -89,7 +90,7 @@ class Warmy(UUIDObject):
 
     def set_temperature(self, temp):
         self.internal_temperature = temp
-        self.internal_temperature_last_update = time.time()
+        self.internal_temperature_last_update = utime.time()
 
     def is_warming_needed(self, desired_temp, measured_temp):
         if self.warming:
@@ -101,7 +102,7 @@ class Warmy(UUIDObject):
 
         if self.mode == Warmy.AUTO_MODE:
             self.disabled = False
-            desired_temp = self.setup.get_required_temp(time.time())
+            desired_temp = self.setup.get_required_temp(utime.time())
             if self.is_warming_needed(desired_temp, self.internal_temperature):
                 self.warming = True
             else:
@@ -119,7 +120,7 @@ class Warmy(UUIDObject):
             self.warming = False
 
     def to_json(self):
-        now = time.time()
+        timestamp = utime.mktime(utime.localtime()) + 946684800
 
         return {
             'fired': self.warming,
@@ -127,9 +128,9 @@ class Warmy(UUIDObject):
             'set_point': self.desired_temperature,
             'programmed_set_point': self.desired_temperature,
             'hysteresis': self.hysteresis,
-            'timestamp': now,
+            'timestamp': timestamp,
             'external_temperature': self.external_temperature,
-            'external_temperature_last_update': now,
+            'external_temperature_last_update': timestamp,
             'internal_temperature': self.internal_temperature,
             'internal_temperature_last_update': self.internal_temperature_last_update,
             'override_end_timestamp': 999999
@@ -230,6 +231,8 @@ class WarmyThermostat(object):
 
         self.warmy.set_temperature(actual_temp)
 
+        self.warmy.thermostat()
+
         if self.warmy.disabled:
             self.override_pin.high()
             self.warming_pin.high()
@@ -239,20 +242,20 @@ class WarmyThermostat(object):
                 self.warming_pin.high()
             else:
                 self.warming_pin.low()
-
-        print(
-            """
-Mode: %s
-Override: %s
-Warming: %s
-Temp: %s
-            """ % (
-                self.warmy.mode,
-                not self.warmy.disabled,
-                self.warmy.warming,
-                self.warmy.internal_temperature
+        if True:
+            print(
+                """
+    Mode: %s
+    Override: %s
+    Warming: %s
+    Temp: %s
+                """ % (
+                    self.warmy.mode,
+                    not self.warmy.disabled,
+                    self.warmy.warming,
+                    self.warmy.internal_temperature
+                )
             )
-        )
 
         self.notify_state()
         self.notify_config()
@@ -266,7 +269,7 @@ def main():
         wlan = network.WLAN(network.STA_IF)
         wlan.active(True)
         wlan.connect(WIFI_CONFIG['essid'], WIFI_CONFIG['wifi_password'])
-        wlan.config('mac')
+
         wlan.ifconfig()
         # Wait MAX_CONNECTION_WAIT_PERIODS, if is not connected restart
         MAX_CONNECTION_WAIT_PERIODS = 120
@@ -281,14 +284,22 @@ def main():
             if connection_periods_spent > MAX_CONNECTION_WAIT_PERIODS:
                 machine.reset()
 
+        config['client_id'] = ubinascii.hexlify(wlan.config('mac')).decode('ascii')
+
+        print(config['client_id'])
+
         settime()
+
+        print(utime.localtime())
+
         thermostat = WarmyThermostat()
         # Load previous settings from file system
         thermostat.load_settings()
         while True:
             thermostat.thermostat()
     except Exception as e:
-        machine.reset()
+        print(e)
+        #machine.reset()
 
 
 if __name__ == '__main__':
